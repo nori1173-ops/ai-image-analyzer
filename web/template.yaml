@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Image Analysis API - Web stack (S3 + CloudFront)
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Description: Prefix for resource naming (passed from parent stack)
+  ApiDomainName:
+    Type: String
+    Description: API Gateway execute-api domain name (e.g., abc123.execute-api.ap-northeast-1.amazonaws.com)
+  ProjectName:
+    Type: String
+    Default: image-analysis
+    Description: Tag value for Project
+  BaseDomainName:
+    Type: String
+    Default: example-cloud.com
+    Description: Base domain name for custom URL
+  SubDomain:
+    Type: String
+    Default: image-analysis
+    Description: Subdomain for custom URL
+  HostedZoneId:
+    Type: String
+    Default: ZXXXXXXXXXXXXX
+    Description: Route53 hosted zone ID for BaseDomainName
+  AcmCertificateArn:
+    Type: String
+    Default: arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    Description: ACM certificate ARN in us-east-1 for CloudFront
+  OriginVerifyHeader:
+    Type: String
+    Default: x-origin-verify
+    Description: Custom header name for CloudFront origin verification
+  OriginVerifyValue:
+    Type: String
+    NoEcho: true
+    Default: your-origin-verify-secret
+    Description: Secret value for origin verification
+  AllowedIpAddress:
+    Type: String
+    Default: 203.0.113.1
+    Description: Allowed IP address for access restriction
+
+Resources:
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ResourcePrefix}-website-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: Bucket
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebsiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Sub '${AWS::AccountId}'
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ResourcePrefix}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_200
+        Comment: !Sub '${ResourcePrefix} - Image Analysis'
+        Aliases:
+          - !Sub '${SubDomain}.${BaseDomainName}'
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          SslSupportMethod: sni-only
+
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+
+          - Id: ApiOrigin
+            DomainName: !Ref ApiDomainName
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: !Ref OriginVerifyHeader
+                HeaderValue: !Ref OriginVerifyValue
+
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt IpRestrictFunction.FunctionARN
+
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt IpRestrictFunction.FunctionARN
+
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: Distribution
+
+  RecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Sub '${SubDomain}.${BaseDomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2
+            DNSName: !GetAtt CloudFrontDistribution.DomainName
+
+  IpRestrictFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${ResourcePrefix}-ip-restrict'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: IP restriction and API path rewrite
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var clientIp = event.viewer.ip;
+          var allowedIp = '${AllowedIpAddress}';
+
+          if (clientIp !== allowedIp) {
+            return {
+              statusCode: 403,
+              statusDescription: 'Forbidden',
+              body: { encoding: 'text', data: 'Access denied' }
+            };
+          }
+
+          if (request.uri.startsWith('/api/')) {
+            request.uri = request.uri.replace('/api', '/prod');
+          }
+          return request;
+        }
+
+Outputs:
+  CustomDomainName:
+    Description: Custom domain name
+    Value: !Sub '${SubDomain}.${BaseDomainName}'
+
+  CustomDomainUrl:
+    Description: Custom domain URL
+    Value: !Sub 'https://${SubDomain}.${BaseDomainName}'
+
+  CloudFrontURL:
+    Description: CloudFront Distribution URL
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+
+  WebsiteBucketName:
+    Description: S3 Bucket for website
+    Value: !Ref WebsiteBucket

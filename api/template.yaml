@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Image Analysis API - API stack
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Description: Prefix for resource naming (passed from parent stack)
+  OriginVerifyHeader:
+    Type: String
+    Default: x-origin-verify
+    Description: Custom header name for CloudFront origin verification
+  OriginVerifyValue:
+    Type: String
+    NoEcho: true
+    Default: your-origin-verify-secret
+    Description: Secret value for origin verification
+  ProjectName:
+    Type: String
+    Default: image-analysis
+    Description: Tag value for Project
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARNING
+      - ERROR
+    Description: Lambda log level
+  PowertoolsPython:
+    Type: String
+    Description: PowertoolsPython Layer ARN
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.12
+    MemorySize: 512
+
+Resources:
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ResourcePrefix}-user-pool'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+      UserPoolTags:
+        Project: !Ref ProjectName
+        Name: UserPool
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${ResourcePrefix}-client'
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  ImageAnalysisFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-api'
+      CodeUri: ../lambda/
+      Handler: handler.lambda_handler
+      Tags:
+        Project: !Ref ProjectName
+        Name: Function
+      Layers:
+        - !Ref PowertoolsPython
+      Environment:
+        Variables:
+          ORIGIN_VERIFY_HEADER: !Ref OriginVerifyHeader
+          ORIGIN_VERIFY_VALUE: !Ref OriginVerifyValue
+          SSM_OPENAI_API_KEY_PATH: /image-analysis/openai-api-key
+          LogLevel: !Ref LogLevel
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: image-analysis/*
+        - S3ReadPolicy:
+            BucketName: '*'
+      Events:
+        AnalyzeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /analyze
+            Method: POST
+        WorkflowAnalyzeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /workflow/analyze
+            Method: POST
+            Auth:
+              Authorizer: NONE
+              ApiKeyRequired: true
+        HealthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      EndpointConfiguration: REGIONAL
+      Cors:
+        AllowOrigin: "'*'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt CognitoUserPool.Arn
+      Tags:
+        Project: !Ref ProjectName
+        Name: Api
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - RestApiprodStage
+    Properties:
+      Name: !Sub '${ResourcePrefix}-api-key'
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref RestApi
+          StageName: prod
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: ApiKey
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - RestApiprodStage
+    Properties:
+      UsagePlanName: !Sub '${ResourcePrefix}-usage-plan'
+      ApiStages:
+        - ApiId: !Ref RestApi
+          Stage: prod
+      Throttle:
+        RateLimit: 10
+        BurstLimit: 20
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: UsagePlan
+
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+Outputs:
+  RestApiId:
+    Description: API Gateway REST API ID
+    Value: !Ref RestApi
+
+  ApiEndpoint:
+    Description: API Gateway endpoint
+    Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+
+  ApiKeyId:
+    Description: API Key ID
+    Value: !Ref ApiKey

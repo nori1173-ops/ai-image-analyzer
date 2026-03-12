@@ -1,0 +1,265 @@
+openapi: 3.0.3
+info:
+    version: 1.0.0
+    title: Image-Analysis-API
+    description: 画像に対して、指定オブジェクト（人物、車両、損傷等）の有無をAIで判定するAPIです。
+servers:
+    - url: https://image-analysis.example-cloud.com
+tags:
+    - name: Analyze
+    - name: Health
+paths:
+    /api/analyze:
+        post:
+            tags:
+                - Analyze
+            summary: 画像解析（Cognito認証）
+            description: "
+                画像に指定オブジェクトが含まれるかをAIで判定します。\n
+                - Cognito JWT トークンによる認証が必要です。\n
+                - image または data のいずれかで画像を指定してください。\n
+                "
+            security:
+                - CognitoAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/AnalyzeRequest"
+                        examples:
+                            dataUri:
+                                summary: data URI 形式
+                                value:
+                                    image: "data:image/jpeg;base64,/9j/4AAQ..."
+                                    target: "crack"
+                                    model: "gpt-4.1-mini"
+                                    detail: "low"
+                            rawBase64:
+                                summary: raw base64 形式
+                                value:
+                                    data: "/9j/4AAQ..."
+                                    target: "crack"
+                            s3Key:
+                                summary: S3キー参照
+                                value:
+                                    image_bucket: "bucket-name"
+                                    image_key: "path/to/image.jpg"
+                                    target: "crack"
+                            urlRef:
+                                summary: URL参照
+                                value:
+                                    image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/image.jpg"
+                                    target: "crack"
+            responses:
+                200:
+                    description: 解析成功
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AnalyzeResponse"
+                400:
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                            examples:
+                                missingImage:
+                                    value:
+                                        error: "image or data is required"
+                                missingTarget:
+                                    value:
+                                        error: "target is required"
+                                invalidJson:
+                                    value:
+                                        error: "Invalid JSON"
+                401:
+                    description: Unauthorized（JWTトークン無効/期限切れ）
+                403:
+                    description: Forbidden（オリジン検証失敗）
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                            example:
+                                error: "Forbidden"
+    /api/workflow/analyze:
+        post:
+            tags:
+                - Analyze
+            summary: 画像解析（APIキー認証・ワークフロー用）
+            description: "
+                ワークフロー連携用の画像解析エンドポイントです。\n
+                - APIキーによる認証が必要です。\n
+                - 外部システムのワークフローから呼び出されます。\n
+                "
+            security:
+                - ApiKeyAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/AnalyzeRequest"
+                        examples:
+                            rawBase64:
+                                summary: raw base64 形式
+                                value:
+                                    data: "/9j/4AAQ..."
+                                    target: "crack"
+                                    model: "gpt-4.1-mini"
+                                    detail: "low"
+                            s3Key:
+                                summary: S3キー参照
+                                value:
+                                    image_bucket: "bucket-name"
+                                    image_key: "path/to/image.jpg"
+                                    target: "crack"
+                            urlRef:
+                                summary: URL参照
+                                value:
+                                    image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/image.jpg"
+                                    target: "crack"
+            responses:
+                200:
+                    description: 解析成功
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AnalyzeResponse"
+                400:
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                403:
+                    description: Forbidden（APIキー無効）
+    /api/health:
+        get:
+            tags:
+                - Health
+            summary: ヘルスチェック
+            description: APIの稼働状態を確認します。認証不要です。
+            responses:
+                200:
+                    description: 正常稼働
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/HealthResponse"
+                            example:
+                                status: "ok"
+                                timestamp: "2026-03-05T12:00:00+00:00"
+components:
+    securitySchemes:
+        CognitoAuth:
+            type: http
+            scheme: bearer
+            bearerFormat: JWT
+            description: Cognito User Pool から取得した ID トークン
+        ApiKeyAuth:
+            type: apiKey
+            in: header
+            name: x-api-key
+            description: API Gateway で発行された API キー
+    schemas:
+        AnalyzeRequest:
+            type: object
+            required:
+                - target
+            properties:
+                image:
+                    type: string
+                    description: "data URI 形式の画像（例: data:image/jpeg;base64,...）"
+                data:
+                    type: string
+                    description: raw base64 エンコードされた画像データ
+                image_bucket:
+                    type: string
+                    description: S3バケット名（image_keyと組み合わせて使用）
+                image_key:
+                    type: string
+                    description: S3オブジェクトキー（image_bucketと組み合わせて使用）
+                image_url:
+                    type: string
+                    description: 画像のURL（*.amazonaws.comドメインのみ許可）
+                target:
+                    type: string
+                    description: 検出対象のオブジェクト名
+                    example: "crack"
+                model:
+                    type: string
+                    description: 使用するAIモデル
+                    default: "gpt-4.1-mini"
+                    enum:
+                        - "gpt-4.1-mini"
+                        - "gpt-4.1"
+                        - "gpt-5.2"
+                detail:
+                    type: string
+                    description: 画像解析の解像度
+                    default: "low"
+                    enum:
+                        - "low"
+                        - "high"
+                        - "auto"
+        AnalyzeResponse:
+            type: object
+            properties:
+                found:
+                    type: boolean
+                    description: 指定オブジェクトが画像内に存在するか
+                answer:
+                    type: string
+                    description: AIによる詳細な説明
+                confidence:
+                    type: integer
+                    minimum: 0
+                    maximum: 100
+                    description: 確信度（0〜100）
+                context:
+                    type: string
+                    description: AIへの質問文
+                model:
+                    type: string
+                    description: 実際に使用されたモデル名
+                usage:
+                    type: object
+                    description: トークン使用量
+                    properties:
+                        prompt_tokens:
+                            type: integer
+                        completion_tokens:
+                            type: integer
+                        total_tokens:
+                            type: integer
+                elapsed_seconds:
+                    type: number
+                    description: 処理時間（秒）
+            example:
+                found: true
+                answer: "画像の左下にひび割れが確認できます。"
+                confidence: 85
+                context: "この画像に「crack」は存在しますか？"
+                model: "gpt-4.1-mini"
+                usage:
+                    prompt_tokens: 1200
+                    completion_tokens: 80
+                    total_tokens: 1280
+                elapsed_seconds: 2.34
+        HealthResponse:
+            type: object
+            properties:
+                status:
+                    type: string
+                timestamp:
+                    type: string
+                    format: date-time
+        ErrorResponse:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: エラーメッセージ

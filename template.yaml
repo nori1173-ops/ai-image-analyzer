@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Image Analysis - Root Stack
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: image-analysis
+    Description: Tag value for Project
+  PowertoolsPython:
+    Type: String
+    Description: PowertoolsPython Layer ARN
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARNING
+      - ERROR
+    Description: Lambda log level
+  SubDomain:
+    Type: String
+    Default: image-analysis
+    Description: Subdomain for custom URL
+
+Resources:
+  ApiStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./api/template.yaml
+      Parameters:
+        ResourcePrefix: !Ref AWS::StackName
+        ProjectName: !Ref ProjectName
+        PowertoolsPython: !Ref PowertoolsPython
+        LogLevel: !Ref LogLevel
+
+  WebStack:
+    Type: AWS::Serverless::Application
+    DependsOn: ApiStack
+    Properties:
+      Location: ./web/template.yaml
+      Parameters:
+        ResourcePrefix: !Ref AWS::StackName
+        ApiDomainName: !Sub
+          - "${ApiId}.execute-api.${AWS::Region}.amazonaws.com"
+          - ApiId: !GetAtt ApiStack.Outputs.RestApiId
+        ProjectName: !Ref ProjectName
+        SubDomain: !Ref SubDomain
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint
+    Value: !GetAtt ApiStack.Outputs.ApiEndpoint
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !GetAtt ApiStack.Outputs.CognitoUserPoolId
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !GetAtt ApiStack.Outputs.CognitoUserPoolClientId
+  CustomDomainUrl:
+    Description: Custom domain URL
+    Value: !GetAtt WebStack.Outputs.CustomDomainUrl
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !GetAtt WebStack.Outputs.CloudFrontDistributionId
+  WebsiteBucketName:
+    Description: S3 Bucket for website
+    Value: !GetAtt WebStack.Outputs.WebsiteBucketName

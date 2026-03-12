@@ -1,0 +1,33 @@
+# SAM configuration file
+version = 0.1
+
+[default.build.parameters]
+cached = true
+
+[default.deploy.parameters]
+stack_name = "image-analysis-dev"
+resolve_s3 = true
+s3_prefix = "image-analysis-dev"
+region = "ap-northeast-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+disable_rollback = false
+parameter_overrides = [
+    "LogLevel=DEBUG",
+    "SubDomain=image-analysis-dev",
+    "PowertoolsPython=arn:aws:lambda:ap-northeast-1:123456789012:layer:PowertoolsPython:74",
+]
+
+[production.deploy.parameters]
+stack_name = "image-analysis-api"
+resolve_s3 = true
+s3_prefix = "image-analysis-api"
+region = "ap-northeast-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+disable_rollback = false
+parameter_overrides = [
+    "LogLevel=INFO",
+    "SubDomain=image-analysis",
+    "PowertoolsPython=arn:aws:lambda:ap-northeast-1:123456789012:layer:PowertoolsPython:74",
+]
