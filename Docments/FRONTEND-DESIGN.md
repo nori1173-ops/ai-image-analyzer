@@ -13,9 +13,9 @@
 | コンポーネント | 責務 | 主要Props | Events |
 |--------------|------|----------|--------|
 | App.vue | ルート、Amplify認証ラッパー、レイアウト制御、API呼び出し | - | - |
-| AppHeader.vue | ヘッダー、ユーザー名表示、サインアウト | user, signOut | - |
-| ImageUploader.vue | D&D/クリック画像入力、プレビュー、バリデーション | - | update |
-| AnalysisForm.vue | target/model/detail入力、解析ボタン | loading, hasImage | analyze |
+| AppHeader.vue | ヘッダー、ユーザー名表示、サインアウト | user | signOut |
+| ImageUploader.vue | D&D/クリック画像入力、プレビュー、バリデーション | - | update:image |
+| AnalysisForm.vue | target/model/detail入力、解析ボタン | loading, hasImage | submit |
 | AnalysisResult.vue | 結果表示（発見バッジ＋確信度円グラフ） | found, confidence | - |
 | ChatLog.vue | 解析ログ一覧（ユーザー/AIメッセージ統合） | entries | - |
 | UsageGuide.vue | 使い方ステップガイド | - | - |

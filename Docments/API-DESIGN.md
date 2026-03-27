@@ -14,13 +14,15 @@
 
 ![API-DESIGN-diagram-1](images/API-DESIGN-diagram-1.svg)
 
-| 方式 | ヘッダー | 対象エンドポイント | 用途 |
-|------|---------|-------------------|------|
-| Cognito JWT | `Authorization: Bearer <token>` | /api/analyze | テスト画面 |
-| APIキー | `x-api-key: <key>` | /api/workflow/analyze | ワークフロー連携 |
-| なし | - | /api/health | ヘルスチェック |
+| 方式 | ヘッダー | 用途 |
+|------|---------|------|
+| Cognito JWT | `Authorization: Bearer <token>` | テスト画面（/api/analyze） |
+| APIキー | `x-api-key: <key>` | ワークフロー連携（/api/workflow/analyze） |
+| なし | - | /api/health のみ |
 
 ## POST /api/analyze
+
+テスト画面用の画像解析エンドポイント。Cognito JWTによる認証が必要。
 
 ### リクエスト
 
@@ -56,12 +58,12 @@
   "answer": "はい、画像の右側に左下にひび割れが確認できます。",
   "confidence": 92,
   "model": "gpt-4.1-mini",
+  "elapsed_seconds": 2.34,
   "usage": {
     "prompt_tokens": 1200,
     "completion_tokens": 85,
     "total_tokens": 1285
-  },
-  "elapsed_seconds": 2.34
+  }
 }
 ```
 
@@ -75,6 +77,11 @@
 | usage | object | トークン使用量 |
 | elapsed_seconds | number | 処理時間（秒） |
 
+## POST /api/workflow/analyze
+
+ワークフロー連携用の画像解析エンドポイント。リクエスト/レスポンス仕様は POST /api/analyze と同一。
+認証方式のみ異なり、APIキー（`x-api-key` ヘッダー）を使用する。
+
 ## GET /api/health
 
 ### レスポンス (200 OK)
@@ -86,19 +93,9 @@
 }
 ```
 
-## エラーレスポンス
+## エラーコード一覧
 
-### レスポンス形式
-
-```json
-{
-  "error": "target is required"
-}
-```
-
-### エラー一覧
-
-| HTTP | error メッセージ | 説明 | 対処法 |
+| HTTP | エラーメッセージ | 説明 | 対処法 |
 |------|-----------------|------|--------|
 | 400 | image or data is required | image/dataが未指定 | image, data, image_url, image_bucket+image_key のいずれかを指定 |
 | 400 | target is required | targetが未指定 | target を指定 |
@@ -106,9 +103,18 @@
 | 400 | image_bucket and image_key are both required | S3参照の片方のみ指定 | 両方指定する |
 | 400 | URL domain not allowed... | 許可外ドメインのURL | *.amazonaws.com ドメインのみ許可 |
 | 400 | Image too large (max 20MB) | 画像サイズ超過 | 画像を圧縮 |
-| 401 | - | JWT無効/期限切れ | トークンを再取得 |
+| 401 | Unauthorized | JWT無効/期限切れ | トークンを再取得 |
 | 403 | Forbidden | オリジン検証失敗/APIキー無効 | 正しい経路でアクセス |
 | 404 | Not Found | 不明なエンドポイント | パスとメソッドを確認 |
+| 500 | AI_ERROR | OpenAI API呼び出し失敗 | リトライ |
+
+### エラーレスポンス形式
+
+```json
+{
+  "error": "target is required"
+}
+```
 
 ## curlサンプル
 
@@ -128,7 +134,7 @@ curl -X POST https://image-analysis.example-cloud.com/api/analyze \
 ### ワークフロー用 (APIキー)
 
 ```bash
-curl -X POST https://{api-gateway-domain}/prod/analyze \
+curl -X POST https://{api-gateway-domain}/prod/workflow/analyze \
   -H "Content-Type: application/json" \
   -H "x-api-key: $API_KEY" \
   -d '{

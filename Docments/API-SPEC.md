@@ -40,8 +40,8 @@ export COGNITO_TOKEN="eyJraWQi..."
 ```bash
 aws apigateway get-api-keys --include-values \
   --region ap-northeast-1 \
-  --query 'items[?name==`image-analysis-key`].value' \
-  --output text
+  --query 'items[?contains(name, `api-key`)].{name: name, value: value}' \
+  --output table
 ```
 
 ## 各エンドポイント呼び出しサンプル
@@ -73,6 +73,7 @@ curl -X POST https://<api-gateway-domain>/prod/workflow/analyze \
   -H "x-api-key: $API_KEY" \
   -d "{
     \"data\": \"$(base64 -w 0 photo.jpg)\",
+    \"filename\": \"photo.jpg\",
     \"target\": \"crack\"
   }"
 ```
@@ -85,7 +86,7 @@ curl -X POST https://<api-gateway-domain>/prod/workflow/analyze \
   -H "x-api-key: $API_KEY" \
   -d '{
     "image_bucket": "<bucket-name>",
-    "image_key": "path/to/image.jpg",
+    "image_key": "tmp/message-id/photo.jpg",
     "target": "crack"
   }'
 ```
@@ -145,21 +146,20 @@ curl https://image-analysis.example-cloud.com/api/health
 # => {"status": "ok", "timestamp": "2026-03-04T12:00:00Z"}
 ```
 
-## エラーレスポンスと対処法
+## エラーコード一覧と対処法
 
 エラーレスポンスは `{"error": "メッセージ"}` 形式で返却される。
 
-| HTTP | error メッセージ | 原因 | 対処法 |
-|------|-----------------|------|--------|
-| 400 | image or data is required | image/data/image_url/image_bucket+image_keyが未指定 | いずれかを指定する |
-| 400 | target is required | targetが未指定 | targetを指定する |
-| 400 | Invalid JSON | リクエストボディが不正 | 正しいJSONを送信する |
-| 400 | image_bucket and image_key are both required | S3参照の片方のみ指定 | 両方指定する |
-| 400 | URL domain not allowed... | 許可外ドメインのURL | *.amazonaws.com のみ許可 |
-| 400 | Image too large (max 20MB) | 20MB超過 | 画像を圧縮する |
-| 401 | - | JWT無効/期限切れ | 再ログインしてトークン再取得 |
-| 403 | Forbidden | オリジン検証失敗/APIキー無効 | 正しい経路でアクセス |
-| 404 | Not Found | 不明なエンドポイント | パスとメソッドを確認 |
+| HTTP | コード | 原因 | 対処法 |
+|------|--------|------|--------|
+| 400 | MISSING_IMAGE | image/dataが未指定 | いずれかを指定する |
+| 400 | MISSING_TARGET | targetが未指定 | targetを指定する |
+| 400 | INVALID_IMAGE | base64デコード失敗 | 画像を再エンコード |
+| 400 | IMAGE_TOO_LARGE | 20MB超過 | 画像を圧縮する |
+| 401 | UNAUTHORIZED | JWT無効/期限切れ | 再ログインしてトークン再取得 |
+| 403 | FORBIDDEN | APIキー無効またはIP制限 | キーとIPを確認 |
+| 500 | AI_ERROR | OpenAI API障害 | 時間を置いてリトライ |
+| 504 | TIMEOUT | 処理タイムアウト | detail=lowに変更、画像縮小 |
 
 ## ワークフロー連携 (external-system)
 
@@ -192,7 +192,7 @@ external-systemの `UploadByHttp` タスクを使用して本APIを呼び出す�
       "type": "UploadByHttp",
       "name": "画像解析API呼び出し",
       "config": {
-        "url": "https://<api-gateway-domain>/prod/analyze",
+        "url": "https://<api-gateway-domain>/prod/workflow/analyze",
         "method": "POST",
         "asJson": true,
         "headers": {

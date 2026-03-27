@@ -21,7 +21,7 @@
 |-----------|-----|----------|------|
 | ResourcePrefix | String | - | リソース命名プレフィックス（親スタックから伝播） |
 | OriginVerifyHeader | String | x-origin-verify | CloudFront認証ヘッダー名 |
-| OriginVerifyValue | String | - | CloudFront認証ヘッダー値 |
+| OriginVerifyValue | String | - | CloudFront認証ヘッダー値（NoEcho） |
 | ProjectName | String | image-analysis | Projectタグ値 |
 | LogLevel | String | INFO | Lambdaログレベル（DEBUG/INFO/WARNING/ERROR） |
 | PowertoolsPython | String | - | AWS Lambda Powertools Layer ARN |
@@ -33,9 +33,12 @@
 | CognitoUserPool | AWS::Cognito::UserPool | ユーザー認証プール |
 | CognitoUserPoolClient | AWS::Cognito::UserPoolClient | SPAクライアント |
 | ImageAnalysisFunction | AWS::Serverless::Function | 画像解析Lambda |
-| RestApi | AWS::Serverless::Api | REST APIエンドポイント（CognitoAuthorizer統合） |
+| RestApi | AWS::Serverless::Api | REST APIエンドポイント + Cognito Authorizer |
 | ApiKey | AWS::ApiGateway::ApiKey | ワークフロー用APIキー |
-| UsagePlan / UsagePlanKey | AWS::ApiGateway::UsagePlan | スロットリング制御 |
+| UsagePlan | AWS::ApiGateway::UsagePlan | レート制限 |
+| UsagePlanKey | AWS::ApiGateway::UsagePlanKey | APIキー紐付け |
+
+（CognitoAuthorizer は RestApi の Auth 設定内で定義。LambdaRole は SAM 暗黙生成。）
 
 ### Lambda設定
 
@@ -98,22 +101,23 @@ Policies:
 
 ```javascript
 function handler(event) {
+  var request = event.request;
   var clientIp = event.viewer.ip;
   var allowedIp = 'ALLOWED_IP';
 
-  // API以外のリクエストにIP制限適用
+  // 全リクエストにIP制限適用
   if (clientIp !== allowedIp) {
-    return { statusCode: 403, body: 'Forbidden' };
+    return {
+      statusCode: 403,
+      statusDescription: 'Forbidden',
+      body: { encoding: 'text', data: 'Access denied' }
+    };
   }
 
-  // /api/* → /prod/* リライト
-  var uri = event.request.uri;
-  if (uri.startsWith('/api/')) {
-    event.request.uri = '/prod/' + uri.substring(5);
-    event.request.headers['x-origin-verify'] = { value: 'VERIFY_VALUE' };
+  if (request.uri.startsWith('/api/')) {
+    request.uri = request.uri.replace('/api', '/prod');
   }
-
-  return event.request;
+  return request;
 }
 ```
 

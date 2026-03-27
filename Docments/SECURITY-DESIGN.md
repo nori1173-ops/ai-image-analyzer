@@ -16,7 +16,7 @@
 |------|-----|
 | 許可IP | 203.0.113.1 (許可IP) |
 | 実装箇所 | CloudFront Function (viewer-request) |
-| 対象 | テスト画面経路のみ（全リクエスト） |
+| 対象 | CloudFront経由の全リクエスト（API含む） |
 | ワークフロー | IP制限なし (AWS内部通信のため) |
 
 ### CloudFront Function によるIP制限
