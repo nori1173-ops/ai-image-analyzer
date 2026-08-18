@@ -6,20 +6,31 @@ defineProps<{
 </script>
 
 <template>
-  <v-app-bar color="primary" elevation="0" density="comfortable">
+  <v-app-bar color="surface" elevation="2">
     <v-app-bar-title>
-      <v-icon icon="mdi-image-filter-center-focus" class="mr-2" />
-      AI Image Analyzer
+      <v-icon icon="mdi-image-search" class="mr-2" />
+      Image Analysis
     </v-app-bar-title>
 
     <template v-slot:append>
-      <v-chip variant="tonal" color="white" size="small" class="mr-3">
-        <v-icon icon="mdi-account-circle" start size="small" />
+      <v-btn
+        variant="text"
+        size="small"
+        href="https://openapi.example-cloud.com/image-analysis/"
+        target="_blank"
+        rel="noopener"
+        class="mr-2"
+      >
+        <v-icon icon="mdi-book-open-variant" start />
+        API仕様（Swagger）
+      </v-btn>
+      <span class="text-body-2 mr-4">
+        <v-icon icon="mdi-account" size="small" class="mr-1" />
         {{ user?.signInDetails?.loginId || user?.username || 'User' }}
-      </v-chip>
-      <v-btn variant="tonal" color="white" size="small" @click="signOut">
+      </span>
+      <v-btn variant="outlined" size="small" @click="signOut">
         <v-icon icon="mdi-logout" start />
-        Logout
+        Sign Out
       </v-btn>
     </template>
   </v-app-bar>

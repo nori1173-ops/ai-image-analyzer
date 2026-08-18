@@ -13,8 +13,47 @@ Parameters:
   OriginVerifyValue:
     Type: String
     NoEcho: true
-    Default: your-origin-verify-secret
-    Description: Secret value for origin verification
+    Description: Secret value for origin verification (passed from parent stack / SSM)
+  AllowedImageBuckets:
+    Type: String
+    Default: ""
+    Description: Comma-separated list of S3 buckets allowed for image_bucket input (empty = deny all)
+  SiteOrigin:
+    Type: String
+    Default: https://image-analysis.example-cloud.com
+    Description: Allowed CORS origin (site URL)
+  AnthropicWorkspaceId:
+    Type: String
+    Default: ""
+    Description: Claude Platform on AWS workspace ID (empty until workspace is provisioned)
+  DefaultModel:
+    Type: String
+    Default: anthropic.claude-sonnet-5
+    Description: Default Claude model when request omits model
+  ModelCatalogBucket:
+    Type: String
+    Default: ai-model-selector-data-210000000001
+    Description: ai-model-selector data bucket used for grade-to-model resolution
+  ModelCatalogProfile:
+    Type: String
+    Default: vision-judgment
+    Description: ai-model-selector profile used for grade-to-model resolution
+  BedrockJpRegion:
+    Type: String
+    Default: ap-northeast-1
+    Description: Amazon Bedrock region for models available in Japan
+  BedrockUsRegion:
+    Type: String
+    Default: us-east-1
+    Description: Amazon Bedrock region for Claude models available in the US
+  BedrockGptRegion:
+    Type: String
+    Default: us-east-2
+    Description: Amazon Bedrock region for GPT models
+  LineNotifyTo:
+    Type: String
+    Default: ""
+    Description: LINE Messaging API push destination userId or groupId
   ProjectName:
     Type: String
     Default: image-analysis
@@ -28,9 +67,25 @@ Parameters:
       - WARNING
       - ERROR
     Description: Lambda log level
-  PowertoolsPython:
+  ExamplePowertoolsPython:
     Type: String
-    Description: PowertoolsPython Layer ARN
+    Description: ExamplePowertoolsPython Layer ARN
+  SesDomain:
+    Type: String
+    Default: image-analysis.example-cloud.com
+    Description: SES送信元ドメイン（DKIM検証する）
+  SesSenderAddress:
+    Type: String
+    Default: noreply@image-analysis.example-cloud.com
+    Description: 通知メールのFromアドレス（SesDomain配下）
+  NotifyRecipients:
+    Type: String
+    Default: devA@example.co.jp
+    Description: 通知先メールアドレス（カンマ区切り）
+  HostedZoneId:
+    Type: String
+    Default: Z0EXAMPLEZONE0
+    Description: Route53 ホストゾーンID（DKIM CNAME登録先）
 
 Globals:
   Function:
@@ -38,7 +93,33 @@ Globals:
     Runtime: python3.12
     MemorySize: 512
 
+Conditions:
+  HasAllowedBuckets: !Not [!Equals [!Ref AllowedImageBuckets, ""]]
+
 Resources:
+  LineImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLineNotificationImages
+            Status: Enabled
+            ExpirationInDays: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: Bucket
+
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -79,22 +160,80 @@ Resources:
       FunctionName: !Sub '${ResourcePrefix}-api'
       CodeUri: ../lambda/
       Handler: handler.lambda_handler
+      Timeout: 300
       Tags:
         Project: !Ref ProjectName
         Name: Function
       Layers:
-        - !Ref PowertoolsPython
+        - !Ref ExamplePowertoolsPython
       Environment:
         Variables:
           ORIGIN_VERIFY_HEADER: !Ref OriginVerifyHeader
           ORIGIN_VERIFY_VALUE: !Ref OriginVerifyValue
-          SSM_OPENAI_API_KEY_PATH: /image-analysis/openai-api-key
+          ALLOWED_IMAGE_BUCKETS: !Ref AllowedImageBuckets
+          ALLOWED_ORIGIN: !Ref SiteOrigin
+          ANTHROPIC_AWS_WORKSPACE_ID: !Ref AnthropicWorkspaceId
+          DEFAULT_MODEL: !Ref DefaultModel
+          MODEL_CATALOG_BUCKET: !Ref ModelCatalogBucket
+          MODEL_CATALOG_PROFILE: !Ref ModelCatalogProfile
+          BEDROCK_JP_REGION: !Ref BedrockJpRegion
+          BEDROCK_US_REGION: !Ref BedrockUsRegion
+          BEDROCK_GPT_REGION: !Ref BedrockGptRegion
+          SES_SENDER: !Ref SesSenderAddress
+          NOTIFY_RECIPIENTS: !Ref NotifyRecipients
+          LINE_IMAGES_BUCKET: !Ref LineImagesBucket
+          LINE_NOTIFY_TO: !Ref LineNotifyTo
+          LINE_TOKEN_PARAM: /image-analysis/line-channel-access-token
           LogLevel: !Ref LogLevel
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: image-analysis/*
-        - S3ReadPolicy:
-            BucketName: '*'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub 'arn:aws:s3:::${ModelCatalogBucket}/profiles/*'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: aws-external-anthropic:CreateInference
+              Resource: '*'
+            - Effect: Allow
+              Action: bedrock-mantle:CreateInference
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - sts:GetWebIdentityToken
+                - sts:TagGetWebIdentityToken
+              Resource: !Sub 'arn:aws:sts::${AWS::AccountId}:self'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${SesDomain}"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub '${LineImagesBucket.Arn}/*'
+        - !If
+          - HasAllowedBuckets
+          - Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Split
+                  - ","
+                  - !Sub
+                    - "arn:aws:s3:::${Inner}/*"
+                    - Inner: !Join
+                        - "/*,arn:aws:s3:::"
+                        - !Split [",", !Ref AllowedImageBuckets]
+          - !Ref AWS::NoValue
       Events:
         AnalyzeApi:
           Type: Api
@@ -107,6 +246,21 @@ Resources:
           Properties:
             RestApiId: !Ref RestApi
             Path: /workflow/analyze
+            Method: POST
+            Auth:
+              Authorizer: NONE
+              ApiKeyRequired: true
+        CompareApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /compare
+            Method: POST
+        WorkflowCompareApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /workflow/compare
             Method: POST
             Auth:
               Authorizer: NONE
@@ -126,7 +280,7 @@ Resources:
       StageName: prod
       EndpointConfiguration: REGIONAL
       Cors:
-        AllowOrigin: "'*'"
+        AllowOrigin: !Sub "'${SiteOrigin}'"
         AllowMethods: "'GET,POST,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
       Auth:
@@ -179,6 +333,111 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref UsagePlan
 
+  ApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ResourcePrefix}/api-key'
+      Description: API Gateway API Key for workflow endpoint
+      SecretString: !Sub |
+        {"apiKeyId":"${ApiKey}","apiKeyValue":"INITIAL_DEPLOY","usagePlanId":"${UsagePlan}","restApiId":"${RestApi}","stageName":"prod","resourcePrefix":"${ResourcePrefix}"}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: ApiKeySecret
+
+  ApiKeyRotationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-api-key-rotation'
+      CodeUri: ../lambda/
+      Handler: rotation.lambda_handler
+      Runtime: python3.12
+      Timeout: 60
+      MemorySize: 128
+      Layers:
+        - !Ref ExamplePowertoolsPython
+      Tags:
+        Project: !Ref ProjectName
+        Name: RotationFunction
+      Environment:
+        Variables:
+          LogLevel: !Ref LogLevel
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+                - secretsmanager:PutSecretValue
+                - secretsmanager:UpdateSecretVersionStage
+              Resource: !Ref ApiKeySecret
+            - Effect: Allow
+              Action:
+                - apigateway:POST
+                - apigateway:GET
+                - apigateway:DELETE
+              Resource:
+                - !Sub 'arn:aws:apigateway:${AWS::Region}::/apikeys'
+                - !Sub 'arn:aws:apigateway:${AWS::Region}::/apikeys/*'
+                - !Sub 'arn:aws:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys'
+                - !Sub 'arn:aws:apigateway:${AWS::Region}::/usageplans/${UsagePlan}/keys/*'
+
+  RotationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiKeyRotationFunction
+      Action: lambda:InvokeFunction
+      Principal: secretsmanager.amazonaws.com
+      SourceArn: !Ref ApiKeySecret
+
+  ApiKeyRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: RotationLambdaPermission
+    Properties:
+      SecretId: !Ref ApiKeySecret
+      RotationLambdaARN: !GetAtt ApiKeyRotationFunction.Arn
+      RotationRules:
+        AutomaticallyAfterDays: 90
+
+  SesIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref SesDomain
+      DkimAttributes:
+        SigningEnabled: true
+
+  SesDkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt SesIdentity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords:
+        - !GetAtt SesIdentity.DkimDNSTokenValue1
+
+  SesDkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt SesIdentity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords:
+        - !GetAtt SesIdentity.DkimDNSTokenValue2
+
+  SesDkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt SesIdentity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords:
+        - !GetAtt SesIdentity.DkimDNSTokenValue3
+
 Outputs:
   RestApiId:
     Description: API Gateway REST API ID
@@ -199,3 +458,7 @@ Outputs:
   ApiKeyId:
     Description: API Key ID
     Value: !Ref ApiKey
+
+  ApiKeySecretArn:
+    Description: Secrets Manager ARN for API Key
+    Value: !Ref ApiKeySecret

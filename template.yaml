@@ -7,9 +7,9 @@ Parameters:
     Type: String
     Default: image-analysis
     Description: Tag value for Project
-  PowertoolsPython:
+  ExamplePowertoolsPython:
     Type: String
-    Description: PowertoolsPython Layer ARN
+    Description: ExamplePowertoolsPython Layer ARN
   LogLevel:
     Type: String
     Default: INFO
@@ -23,6 +23,46 @@ Parameters:
     Type: String
     Default: image-analysis
     Description: Subdomain for custom URL
+  BaseDomainName:
+    Type: String
+    Default: example-cloud.com
+    Description: Base domain name for custom URL
+  OriginVerifyValue:
+    Type: String
+    NoEcho: true
+    Description: Secret value for origin verification (provide via SSM at deploy time)
+  AllowedImageBuckets:
+    Type: String
+    Default: ""
+    Description: Comma-separated list of S3 buckets allowed for image_bucket input (empty = deny all)
+  AnthropicWorkspaceId:
+    Type: String
+    Default: ""
+    Description: Claude Platform on AWS workspace ID (empty until workspace is provisioned)
+  DefaultModel:
+    Type: String
+    Default: anthropic.claude-sonnet-5
+    Description: Default Claude model when request omits model
+  ModelCatalogBucket:
+    Type: String
+    Default: ai-model-selector-data-210000000001
+    Description: ai-model-selector data bucket used for grade-to-model resolution
+  ModelCatalogProfile:
+    Type: String
+    Default: vision-judgment
+    Description: ai-model-selector profile used for grade-to-model resolution
+  LineNotifyTo:
+    Type: String
+    Default: ""
+    Description: LINE Messaging API push destination userId or groupId
+  NotifyRecipients:
+    Type: String
+    Default: devA@example.co.jp
+    Description: 通知先メールアドレス（カンマ区切り）
+  HostedZoneId:
+    Type: String
+    Default: Z0EXAMPLEZONE0
+    Description: Route53 ホストゾーンID（SES DKIM CNAME登録先）
 
 Resources:
   ApiStack:
@@ -32,8 +72,20 @@ Resources:
       Parameters:
         ResourcePrefix: !Ref AWS::StackName
         ProjectName: !Ref ProjectName
-        PowertoolsPython: !Ref PowertoolsPython
+        ExamplePowertoolsPython: !Ref ExamplePowertoolsPython
         LogLevel: !Ref LogLevel
+        OriginVerifyValue: !Ref OriginVerifyValue
+        AllowedImageBuckets: !Ref AllowedImageBuckets
+        SiteOrigin: !Sub 'https://${SubDomain}.${BaseDomainName}'
+        AnthropicWorkspaceId: !Ref AnthropicWorkspaceId
+        DefaultModel: !Ref DefaultModel
+        ModelCatalogBucket: !Ref ModelCatalogBucket
+        ModelCatalogProfile: !Ref ModelCatalogProfile
+        LineNotifyTo: !Ref LineNotifyTo
+        SesDomain: !Sub '${SubDomain}.${BaseDomainName}'
+        SesSenderAddress: !Sub 'noreply@${SubDomain}.${BaseDomainName}'
+        NotifyRecipients: !Ref NotifyRecipients
+        HostedZoneId: !Ref HostedZoneId
 
   WebStack:
     Type: AWS::Serverless::Application
@@ -47,6 +99,8 @@ Resources:
           - ApiId: !GetAtt ApiStack.Outputs.RestApiId
         ProjectName: !Ref ProjectName
         SubDomain: !Ref SubDomain
+        BaseDomainName: !Ref BaseDomainName
+        OriginVerifyValue: !Ref OriginVerifyValue
 
 Outputs:
   ApiEndpoint:
@@ -67,3 +121,6 @@ Outputs:
   WebsiteBucketName:
     Description: S3 Bucket for website
     Value: !GetAtt WebStack.Outputs.WebsiteBucketName
+  ApiKeySecretArn:
+    Description: Secrets Manager ARN for API Key
+    Value: !GetAtt ApiStack.Outputs.ApiKeySecretArn

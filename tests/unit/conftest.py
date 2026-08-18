@@ -7,18 +7,31 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'lambda'))
 
 _mock_logger_instance = MagicMock()
-_mock_logger_instance.inject_lambda_context = lambda f: f
 
-_mock_powertools = MagicMock()
-_mock_powertools.Logger = MagicMock(return_value=_mock_logger_instance)
+_mock_lambda_logger_class = MagicMock()
+_mock_lambda_logger_class.return_value = _mock_logger_instance
+_mock_lambda_logger_class.contextualize = lambda f: f
 
-sys.modules['aws_lambda_powertools'] = _mock_powertools
+_mock_logging_module = MagicMock()
+_mock_logging_module.LambdaLogger = _mock_lambda_logger_class
+
+_mock_example_powertools = MagicMock()
+_mock_example_powertools.logging = _mock_logging_module
+
+sys.modules['example_powertools'] = _mock_example_powertools
+sys.modules['example_powertools.logging'] = _mock_logging_module
 
 
 @pytest.fixture
 def mock_logger():
     _mock_logger_instance.reset_mock()
     return _mock_logger_instance
+
+
+@pytest.fixture(autouse=True)
+def reset_line_token_cache(monkeypatch):
+    import notifier
+    monkeypatch.setattr(notifier, '_cached_line_token', None)
 
 
 @pytest.fixture
@@ -31,7 +44,7 @@ def api_gateway_event():
             'content-type': 'application/json',
             'x-origin-verify': 'test-secret'
         },
-        'body': '{"image": "data:image/jpeg;base64,/9j/4AAQ...", "target": "crack", "model": "gpt-4.1-mini", "detail": "low"}',
+        'body': '{"image": "data:image/jpeg;base64,/9j/4AAQ...", "target": "人物", "model": "claude-haiku-4-5", "detail": "low"}',
         'requestContext': {'authorizer': {'claims': {'sub': 'test-user'}}},
         'resource': '/analyze'
     }
@@ -44,7 +57,7 @@ def workflow_event():
         'httpMethod': 'POST',
         'path': '/workflow/analyze',
         'headers': {'content-type': 'application/json'},
-        'body': '{"data": "/9j/4AAQ...", "filename": "photo.jpg", "target": "crack"}',
+        'body': '{"data": "/9j/4AAQ...", "filename": "photo.jpg", "target": "人物", "model": "claude-haiku-4-5"}',
         'requestContext': {},
         'resource': '/workflow/analyze'
     }
@@ -66,7 +79,17 @@ def health_event():
 def mock_env(monkeypatch):
     monkeypatch.setenv('ORIGIN_VERIFY_HEADER', 'x-origin-verify')
     monkeypatch.setenv('ORIGIN_VERIFY_VALUE', 'test-secret')
-    monkeypatch.setenv('SSM_OPENAI_API_KEY_PATH', '/image-analysis/openai-api-key')
+    monkeypatch.setenv('ALLOWED_IMAGE_BUCKETS', 'test-bucket')
+    monkeypatch.setenv('ANTHROPIC_AWS_WORKSPACE_ID', 'ws-test-dummy')
+    monkeypatch.setenv('AWS_REGION', 'ap-northeast-1')
+    monkeypatch.setenv('BEDROCK_JP_REGION', 'ap-northeast-1')
+    monkeypatch.setenv('BEDROCK_US_REGION', 'us-east-1')
+    monkeypatch.setenv('BEDROCK_GPT_REGION', 'us-east-2')
+    monkeypatch.setenv('DEFAULT_MODEL', 'claude-haiku-4-5')
+    monkeypatch.setenv('SES_SENDER', 'noreply@image-analysis.example-cloud.com')
+    monkeypatch.setenv('NOTIFY_RECIPIENTS', 'devA@example.co.jp')
+    monkeypatch.setenv('LINE_IMAGES_BUCKET', 'line-images-bucket')
+    monkeypatch.delenv('LINE_NOTIFY_TO', raising=False)
 
 
 @pytest.fixture
@@ -79,7 +102,8 @@ def s3_event():
         'body': json.dumps({
             'image_bucket': 'test-bucket',
             'image_key': 'tmp/photo.jpg',
-            'target': 'crack'
+            'target': '人物',
+            'model': 'claude-haiku-4-5'
         }),
         'requestContext': {},
         'resource': '/workflow/analyze'
@@ -95,7 +119,8 @@ def url_event():
         'headers': {'content-type': 'application/json'},
         'body': json.dumps({
             'image_url': 'https://test-bucket.s3.ap-northeast-1.amazonaws.com/photo.jpg',
-            'target': 'crack'
+            'target': '人物',
+            'model': 'claude-haiku-4-5'
         }),
         'requestContext': {},
         'resource': '/workflow/analyze'

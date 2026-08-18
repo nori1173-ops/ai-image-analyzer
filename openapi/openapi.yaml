@@ -1,12 +1,13 @@
 openapi: 3.0.3
 info:
-    version: 1.0.0
+    version: 1.6.0
     title: Image-Analysis-API
-    description: 画像に対して、指定オブジェクト（人物、車両、損傷等）の有無をAIで判定するAPIです。
+    description: 観測カメラ等の画像に対して、指定オブジェクト（人物、車両等）の有無をAIで判定・通知するAPIです。前回/今回の画像を比較し、土砂崩れ・河川増水等の災害予兆を検知する比較APIも提供します。
 servers:
     - url: https://image-analysis.example-cloud.com
 tags:
     - name: Analyze
+    - name: Compare
     - name: Health
 paths:
     /api/analyze:
@@ -32,25 +33,24 @@ paths:
                                 summary: data URI 形式
                                 value:
                                     image: "data:image/jpeg;base64,/9j/4AAQ..."
-                                    target: "crack"
-                                    model: "gpt-4.1-mini"
-                                    detail: "low"
+                                    target: "人物"
+                                    model: "anthropic.claude-sonnet-5"
                             rawBase64:
                                 summary: raw base64 形式
                                 value:
                                     data: "/9j/4AAQ..."
-                                    target: "crack"
+                                    target: "人物"
                             s3Key:
                                 summary: S3キー参照
                                 value:
                                     image_bucket: "bucket-name"
                                     image_key: "path/to/image.jpg"
-                                    target: "crack"
+                                    target: "人物"
                             urlRef:
                                 summary: URL参照
                                 value:
                                     image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/image.jpg"
-                                    target: "crack"
+                                    target: "人物"
             responses:
                 200:
                     description: 解析成功
@@ -92,7 +92,7 @@ paths:
             description: "
                 ワークフロー連携用の画像解析エンドポイントです。\n
                 - APIキーによる認証が必要です。\n
-                - 外部システムのワークフローから呼び出されます。\n
+                - mail-backend の HttpUpload タスクから呼び出されます。\n
                 "
             security:
                 - ApiKeyAuth: []
@@ -107,20 +107,19 @@ paths:
                                 summary: raw base64 形式
                                 value:
                                     data: "/9j/4AAQ..."
-                                    target: "crack"
-                                    model: "gpt-4.1-mini"
-                                    detail: "low"
+                                    target: "人物"
+                                    model: "anthropic.claude-sonnet-5"
                             s3Key:
                                 summary: S3キー参照
                                 value:
                                     image_bucket: "bucket-name"
                                     image_key: "path/to/image.jpg"
-                                    target: "crack"
+                                    target: "人物"
                             urlRef:
                                 summary: URL参照
                                 value:
                                     image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/image.jpg"
-                                    target: "crack"
+                                    target: "人物"
             responses:
                 200:
                     description: 解析成功
@@ -136,12 +135,139 @@ paths:
                                 $ref: "#/components/schemas/ErrorResponse"
                 403:
                     description: Forbidden（APIキー無効）
+    /api/compare:
+        post:
+            tags:
+                - Compare
+            summary: 画像比較・災害予兆検知（Cognito認証）
+            description: "
+                定点カメラの前回画像と今回画像を比較し、指定した監視観点で災害危険度をAIで判定します。\n
+                - Cognito JWT トークンによる認証が必要です。\n
+                - before側・after側それぞれ image / data / image_url / image_bucket+image_key のいずれかで画像を指定してください。\n
+                - notify=true かつ危険判定時に、理由付きで写真2枚を添付したメールを送信します。宛先は notify_to / notify_cc / notify_bcc で指定でき、notify_to 省略時はサーバー設定の既定宛先に送信します。\n
+                - notify_line=true かつ危険判定時に、LINE Messaging API で通知（テキスト+画像2枚）を送信します。サーバー側でLINE設定が未構成の場合はスキップされます。\n
+                "
+            security:
+                - CognitoAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CompareRequest"
+                        examples:
+                            dataUri:
+                                summary: data URI 形式
+                                value:
+                                    before_image: "data:image/jpeg;base64,/9j/4AAQ..."
+                                    after_image: "data:image/jpeg;base64,/9j/4AAQ..."
+                                    perspective: "土砂崩れ"
+                                    model: "anthropic.claude-sonnet-5"
+                                    notify: false
+                            s3Key:
+                                summary: S3キー参照
+                                value:
+                                    before_image_bucket: "bucket-name"
+                                    before_image_key: "path/to/before.jpg"
+                                    after_image_bucket: "bucket-name"
+                                    after_image_key: "path/to/after.jpg"
+                                    perspective: "河川水位の上昇"
+                                    notify: true
+            responses:
+                200:
+                    description: 判定成功
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/CompareResponse"
+                400:
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                            examples:
+                                missingImage:
+                                    value:
+                                        error: "before_image, before_data, before_image_url, or before_image_bucket+before_image_key is required"
+                                missingPerspective:
+                                    value:
+                                        error: "perspective is required"
+                                invalidModel:
+                                    value:
+                                        error: "Invalid model"
+                401:
+                    description: Unauthorized（JWTトークン無効/期限切れ）
+                403:
+                    description: Forbidden（オリジン検証失敗）
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                            example:
+                                error: "Forbidden"
+    /api/workflow/compare:
+        post:
+            tags:
+                - Compare
+            summary: 画像比較・災害予兆検知（APIキー認証・ワークフロー用）
+            description: "
+                ワークフロー連携用の画像比較エンドポイントです。\n
+                - APIキーによる認証が必要です。\n
+                - before側・after側それぞれ image / data / image_url / image_bucket+image_key のいずれかで画像を指定してください。\n
+                - notify=true かつ危険判定時に、理由付きで写真2枚を添付したメールを送信します。宛先は notify_to / notify_cc / notify_bcc で指定でき、notify_to 省略時はサーバー設定の既定宛先に送信します。\n
+                - notify_line=true かつ危険判定時に、LINE Messaging API で通知（テキスト+画像2枚）を送信します。サーバー側でLINE設定が未構成の場合はスキップされます。\n
+                "
+            security:
+                - ApiKeyAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CompareRequest"
+                        examples:
+                            s3Key:
+                                summary: S3キー参照
+                                value:
+                                    before_image_bucket: "bucket-name"
+                                    before_image_key: "path/to/before.jpg"
+                                    after_image_bucket: "bucket-name"
+                                    after_image_key: "path/to/after.jpg"
+                                    perspective: "土砂崩れ"
+                                    notify: true
+                            urlRef:
+                                summary: URL参照
+                                value:
+                                    before_image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/before.jpg"
+                                    after_image_url: "https://bucket.s3.ap-northeast-1.amazonaws.com/after.jpg"
+                                    perspective: "河川水位の上昇"
+                                    notify: true
+            responses:
+                200:
+                    description: 判定成功
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/CompareResponse"
+                400:
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                403:
+                    description: Forbidden（APIキー無効）
     /api/health:
         get:
             tags:
                 - Health
             summary: ヘルスチェック
-            description: APIの稼働状態を確認します。認証不要です。
+            description: "
+                APIの稼働状態を確認します。\n
+                - Cognito認証は不要ですが、オリジン検証（CloudFront経由で付与されるカスタムヘッダ）が必須です。\n
+                - API Gatewayを直接呼び出した場合は403となります。\n
+                "
             responses:
                 200:
                     description: 正常稼働
@@ -152,6 +278,14 @@ paths:
                             example:
                                 status: "ok"
                                 timestamp: "2026-03-05T12:00:00+00:00"
+                403:
+                    description: Forbidden（オリジン検証失敗）
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                            example:
+                                error: "Forbidden"
 components:
     securitySchemes:
         CognitoAuth:
@@ -178,33 +312,50 @@ components:
                     description: raw base64 エンコードされた画像データ
                 image_bucket:
                     type: string
-                    description: S3バケット名（image_keyと組み合わせて使用）
+                    description: S3バケット名（image_keyと組み合わせて使用／許可リストに登録されたバケットのみ）
                 image_key:
                     type: string
                     description: S3オブジェクトキー（image_bucketと組み合わせて使用）
                 image_url:
                     type: string
-                    description: 画像のURL（*.amazonaws.comドメインのみ許可）
+                    description: 画像のURL（https の *.amazonaws.com ドメインのみ許可・リダイレクト不可）
                 target:
                     type: string
                     description: 検出対象のオブジェクト名
-                    example: "crack"
+                    example: "人物"
                 model:
                     type: string
-                    description: 使用するAIモデル
-                    default: "gpt-4.1-mini"
+                    description: "使用するAIモデル。anthropic.*/openai.*=Amazon Bedrock経由（AWS内完結）、プレフィックスなし=Claude Platform on AWS（Anthropic運営）。GPTと Sonnet 5 は米国リージョン処理。上記名前空間以外は400。省略時はサーバー側 DEFAULT_MODEL（現状 anthropic.claude-sonnet-5）"
+                    default: "anthropic.claude-sonnet-5"
                     enum:
-                        - "gpt-4.1-mini"
-                        - "gpt-4.1"
-                        - "gpt-5.2"
-                detail:
+                        - "claude-sonnet-5"
+                        - "claude-haiku-4-5"
+                        - "claude-sonnet-4-6"
+                        - "anthropic.claude-sonnet-5"
+                        - "anthropic.claude-haiku-4-5"
+                        - "anthropic.claude-opus-4-7"
+                        - "anthropic.claude-opus-4-8"
+                        - "openai.gpt-5.6-terra"
+                        - "openai.gpt-5.6-luna"
+                        - "openai.gpt-5.6-sol"
+                        - "openai.gpt-5.5"
+                        - "openai.gpt-5.4"
+                grade:
                     type: string
-                    description: 画像解析の解像度
-                    default: "low"
+                    description: "グレード指定（ai-model-selector による実行時解決）。model 省略時のみ有効で、policy.force → mapping.grades → DEFAULT_MODEL の順に実モデルIDへ解決する。model と併用した場合は model が優先"
+                    enum:
+                        - "high"
+                        - "standard"
+                        - "low"
+                effort:
+                    type: string
+                    description: "推論エフォート。対応するモデル（claude-sonnet-5 等）でのみ有効。非対応モデル（claude-haiku-4-5 等）に指定するとAIプロバイダ側でエラーになる場合がある。省略時はモデル既定値（high）"
                     enum:
                         - "low"
+                        - "medium"
                         - "high"
-                        - "auto"
+                        - "xhigh"
+                        - "max"
         AnalyzeResponse:
             type: object
             properties:
@@ -240,15 +391,183 @@ components:
                     description: 処理時間（秒）
             example:
                 found: true
-                answer: "画像の左下にひび割れが確認できます。"
+                answer: "画像の中央付近に人物が1名確認できます。"
                 confidence: 85
-                context: "この画像に「crack」は存在しますか？"
-                model: "gpt-4.1-mini"
+                context: "この画像に「人物」は存在しますか？"
+                model: "anthropic.claude-sonnet-5"
                 usage:
                     prompt_tokens: 1200
                     completion_tokens: 80
                     total_tokens: 1280
                 elapsed_seconds: 2.34
+        CompareRequest:
+            type: object
+            required:
+                - perspective
+            properties:
+                before_image:
+                    type: string
+                    description: "前回画像: data URI 形式（例: data:image/jpeg;base64,...）"
+                before_data:
+                    type: string
+                    description: "前回画像: raw base64 エンコードされた画像データ"
+                before_image_bucket:
+                    type: string
+                    description: "前回画像: S3バケット名（before_image_keyと組み合わせて使用／許可リストに登録されたバケットのみ）"
+                before_image_key:
+                    type: string
+                    description: "前回画像: S3オブジェクトキー（before_image_bucketと組み合わせて使用）"
+                before_image_url:
+                    type: string
+                    description: "前回画像: 画像のURL（https の *.amazonaws.com ドメインのみ許可・リダイレクト不可）"
+                after_image:
+                    type: string
+                    description: "今回画像: data URI 形式（例: data:image/jpeg;base64,...）"
+                after_data:
+                    type: string
+                    description: "今回画像: raw base64 エンコードされた画像データ"
+                after_image_bucket:
+                    type: string
+                    description: "今回画像: S3バケット名（after_image_keyと組み合わせて使用／許可リストに登録されたバケットのみ）"
+                after_image_key:
+                    type: string
+                    description: "今回画像: S3オブジェクトキー（after_image_bucketと組み合わせて使用）"
+                after_image_url:
+                    type: string
+                    description: "今回画像: 画像のURL（https の *.amazonaws.com ドメインのみ許可・リダイレクト不可）"
+                perspective:
+                    type: string
+                    description: 監視観点（災害予兆を判定する基準）
+                    example: "土砂崩れ"
+                model:
+                    type: string
+                    description: "使用するAIモデル。anthropic.*/openai.*=Amazon Bedrock経由（AWS内完結）、プレフィックスなし=Claude Platform on AWS（Anthropic運営）。GPTと Sonnet 5 は米国リージョン処理。上記名前空間以外は400。省略時はサーバー側 DEFAULT_MODEL（現状 anthropic.claude-sonnet-5）"
+                    default: "anthropic.claude-sonnet-5"
+                    enum:
+                        - "claude-sonnet-5"
+                        - "claude-haiku-4-5"
+                        - "claude-sonnet-4-6"
+                        - "anthropic.claude-sonnet-5"
+                        - "anthropic.claude-haiku-4-5"
+                        - "anthropic.claude-opus-4-7"
+                        - "anthropic.claude-opus-4-8"
+                        - "openai.gpt-5.6-terra"
+                        - "openai.gpt-5.6-luna"
+                        - "openai.gpt-5.6-sol"
+                        - "openai.gpt-5.5"
+                        - "openai.gpt-5.4"
+                grade:
+                    type: string
+                    description: "グレード指定（ai-model-selector による実行時解決）。model 省略時のみ有効で、policy.force → mapping.grades → DEFAULT_MODEL の順に実モデルIDへ解決する。model と併用した場合は model が優先"
+                    enum:
+                        - "high"
+                        - "standard"
+                        - "low"
+                effort:
+                    type: string
+                    description: "推論エフォート。対応するモデル（claude-sonnet-5 等）でのみ有効。非対応モデル（claude-haiku-4-5 等）に指定するとAIプロバイダ側でエラーになる場合がある。省略時はモデル既定値（high）"
+                    enum:
+                        - "low"
+                        - "medium"
+                        - "high"
+                        - "xhigh"
+                        - "max"
+                notify:
+                    type: boolean
+                    description: 危険判定時に写真添付メールを送信するか
+                    default: false
+                notify_to:
+                    type: array
+                    items:
+                        type: string
+                        format: email
+                    maxItems: 10
+                    description: "通知メールのTo宛先（最大10件）。省略時はサーバー設定の既定宛先。形式不正・10件超は400"
+                notify_cc:
+                    type: array
+                    items:
+                        type: string
+                        format: email
+                    maxItems: 10
+                    description: "通知メールのCC宛先（最大10件、任意）"
+                notify_bcc:
+                    type: array
+                    items:
+                        type: string
+                        format: email
+                    maxItems: 10
+                    description: "通知メールのBCC宛先（最大10件、任意。メールヘッダには載らない）"
+                notify_line:
+                    type: boolean
+                    description: "危険判定時にLINE Messaging APIで通知（テキスト+画像2枚）を送信するか。画像はS3のpresigned URL（6時間で失効）で送信。サーバー側でLINE設定（チャネルアクセストークン・宛先ID）が未構成の場合はスキップされ line_skip_reason が返る"
+                    default: false
+        CompareResponse:
+            type: object
+            properties:
+                danger:
+                    type: boolean
+                    description: 災害危険が検知されたか
+                risk_level:
+                    type: string
+                    description: 危険度
+                    enum:
+                        - "none"
+                        - "low"
+                        - "medium"
+                        - "high"
+                reason:
+                    type: string
+                    description: 危険度判定の理由（日本語）
+                changes:
+                    type: string
+                    description: 検出された変化の説明
+                model:
+                    type: string
+                    description: 実際に使用されたモデル名
+                usage:
+                    type: object
+                    description: トークン使用量
+                    properties:
+                        prompt_tokens:
+                            type: integer
+                        completion_tokens:
+                            type: integer
+                        total_tokens:
+                            type: integer
+                elapsed_seconds:
+                    type: number
+                    description: 処理時間（秒）
+                notified:
+                    type: boolean
+                    description: 通知メールを送信したか
+                message_id:
+                    type: string
+                    description: 送信したメールのメッセージID（通知成功時のみ）
+                notify_error:
+                    type: string
+                    description: 通知送信に失敗した場合のエラー内容
+                line_notified:
+                    type: boolean
+                    description: LINE通知を送信したか
+                line_skip_reason:
+                    type: string
+                    description: LINE通知をスキップした理由（サーバー側LINE設定が未構成の場合）
+                line_error:
+                    type: string
+                    description: LINE通知の送信に失敗した場合のエラー内容
+            example:
+                danger: true
+                risk_level: "high"
+                reason: "斜面上部に新たな亀裂と土砂の崩落が確認できます。"
+                changes: "前回画像にはなかった土砂の堆積が斜面下部に発生しています。"
+                model: "anthropic.claude-sonnet-5"
+                usage:
+                    prompt_tokens: 2100
+                    completion_tokens: 120
+                    total_tokens: 2220
+                elapsed_seconds: 3.45
+                notified: true
+                message_id: "0100018f-xxxx-xxxx"
         HealthResponse:
             type: object
             properties:

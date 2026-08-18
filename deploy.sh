@@ -9,16 +9,25 @@ fi
 
 ENV="${1:-dev}"
 REGION="ap-northeast-1"
-SSM_PARAM_PATH="/image-analysis/openai-api-key"
+LAYER_ARN="arn:aws:lambda:ap-northeast-1:210000000001:layer:ExamplePowertoolsPython:74"
+ALLOWED_IMAGE_BUCKETS="${ALLOWED_IMAGE_BUCKETS:-}"
+ANTHROPIC_WORKSPACE_ID="${ANTHROPIC_WORKSPACE_ID:-wrkspc_00000000000000000000000000}"
+DEFAULT_MODEL="${DEFAULT_MODEL:-anthropic.claude-sonnet-5}"
 
 case "$ENV" in
   dev)
     SAM_CONFIG_ENV=""
     STACK_NAME="image-analysis-dev"
+    LOG_LEVEL="DEBUG"
+    SUB_DOMAIN="image-analysis-dev"
+    MODEL_CATALOG_BUCKET="ai-model-selector-dev-data-210000000001"
     ;;
   prod)
     SAM_CONFIG_ENV="--config-env production"
     STACK_NAME="image-analysis-api"
+    LOG_LEVEL="INFO"
+    SUB_DOMAIN="image-analysis"
+    MODEL_CATALOG_BUCKET="ai-model-selector-data-210000000001"
     ;;
   *)
     echo "Usage: bash deploy.sh [dev|prod]"
@@ -28,18 +37,30 @@ case "$ENV" in
     ;;
 esac
 
+ORIGIN_VERIFY_SSM_PATH="/${STACK_NAME}/origin-verify"
+
 echo "=== Deploying to: $ENV ==="
 echo "Stack: $STACK_NAME"
 echo ""
 
-echo "=== Step 1: SSM Parameter existence check ==="
-if ! aws ssm get-parameter --name "$SSM_PARAM_PATH" --profile "$AWS_PROFILE" --region "$REGION" > /dev/null 2>&1; then
-  echo "ERROR: SSM Parameter $SSM_PARAM_PATH does not exist."
-  echo "Create it with:"
-  echo "  aws ssm put-parameter --name $SSM_PARAM_PATH --type SecureString --value YOUR_KEY --profile $AWS_PROFILE --region $REGION"
-  exit 1
+echo "=== Step 1b: Origin verify secret (SSM) ==="
+if ! aws ssm get-parameter --name "$ORIGIN_VERIFY_SSM_PATH" --profile "$AWS_PROFILE" --region "$REGION" > /dev/null 2>&1; then
+  echo "Origin verify secret not found. Generating a new one at $ORIGIN_VERIFY_SSM_PATH"
+  GENERATED_SECRET=$(openssl rand -hex 16)
+  aws ssm put-parameter \
+    --name "$ORIGIN_VERIFY_SSM_PATH" \
+    --type String \
+    --value "$GENERATED_SECRET" \
+    --profile "$AWS_PROFILE" \
+    --region "$REGION" > /dev/null
+  echo "Generated and stored origin verify secret."
 fi
-echo "SSM Parameter found."
+ORIGIN_VERIFY_VALUE=$(aws ssm get-parameter \
+  --name "$ORIGIN_VERIFY_SSM_PATH" \
+  --query "Parameter.Value" \
+  --output text \
+  --profile "$AWS_PROFILE" \
+  --region "$REGION")
 
 echo ""
 echo "=== Step 2: SAM build ==="
@@ -47,7 +68,22 @@ sam build --profile "$AWS_PROFILE" --region "$REGION"
 
 echo ""
 echo "=== Step 3: Deploy (nested stacks) ==="
-sam deploy --profile "$AWS_PROFILE" --region "$REGION" $SAM_CONFIG_ENV
+PARAM_OVERRIDES=(
+  "LogLevel=${LOG_LEVEL}"
+  "SubDomain=${SUB_DOMAIN}"
+  "ExamplePowertoolsPython=${LAYER_ARN}"
+  "OriginVerifyValue=${ORIGIN_VERIFY_VALUE}"
+  "DefaultModel=${DEFAULT_MODEL}"
+  "ModelCatalogBucket=${MODEL_CATALOG_BUCKET}"
+)
+if [ -n "$ALLOWED_IMAGE_BUCKETS" ]; then
+  PARAM_OVERRIDES+=("AllowedImageBuckets=${ALLOWED_IMAGE_BUCKETS}")
+fi
+if [ -n "$ANTHROPIC_WORKSPACE_ID" ]; then
+  PARAM_OVERRIDES+=("AnthropicWorkspaceId=${ANTHROPIC_WORKSPACE_ID}")
+fi
+sam deploy --profile "$AWS_PROFILE" --region "$REGION" $SAM_CONFIG_ENV \
+  --parameter-overrides "${PARAM_OVERRIDES[@]}"
 
 echo ""
 echo "=== Step 4: Generate frontend Amplify config ==="
@@ -76,6 +112,14 @@ const amplifyConfig = {
 export default amplifyConfig
 AMPLIFY_EOF
 echo "Generated frontend/src/amplifyconfiguration.ts"
+
+echo ""
+echo "=== Step 4b: Build frontend (must run after Amplify config generation) ==="
+if [ -d "frontend/node_modules" ]; then
+  npm --prefix frontend run build
+else
+  echo "WARNING: frontend/node_modules not found. Skipping frontend build."
+fi
 
 echo ""
 echo "=== Step 5: Sync frontend to S3 ==="

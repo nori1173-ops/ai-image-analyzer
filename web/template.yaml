@@ -23,11 +23,11 @@ Parameters:
     Description: Subdomain for custom URL
   HostedZoneId:
     Type: String
-    Default: ZXXXXXXXXXXXXX
+    Default: Z0EXAMPLEZONE0
     Description: Route53 hosted zone ID for BaseDomainName
   AcmCertificateArn:
     Type: String
-    Default: arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    Default: arn:aws:acm:us-east-1:210000000001:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
     Description: ACM certificate ARN in us-east-1 for CloudFront
   OriginVerifyHeader:
     Type: String
@@ -36,12 +36,11 @@ Parameters:
   OriginVerifyValue:
     Type: String
     NoEcho: true
-    Default: your-origin-verify-secret
-    Description: Secret value for origin verification
-  AllowedIpAddress:
-    Type: String
-    Default: 203.0.113.1
-    Description: Allowed IP address for access restriction
+    Description: Secret value for origin verification (passed from parent stack / SSM)
+  AllowedIpAddresses:
+    Type: CommaDelimitedList
+    Default: 203.0.113.10
+    Description: Allowed IP addresses for access restriction (comma-separated)
 
 Resources:
   WebsiteBucket:
@@ -178,25 +177,27 @@ Resources:
       FunctionConfig:
         Comment: IP restriction and API path rewrite
         Runtime: cloudfront-js-2.0
-      FunctionCode: !Sub |
-        function handler(event) {
-          var request = event.request;
-          var clientIp = event.viewer.ip;
-          var allowedIp = '${AllowedIpAddress}';
+      FunctionCode: !Sub
+        - |
+          function handler(event) {
+            var request = event.request;
+            var clientIp = event.viewer.ip;
+            var allowedIps = '${AllowedIps}'.split(',');
 
-          if (clientIp !== allowedIp) {
-            return {
-              statusCode: 403,
-              statusDescription: 'Forbidden',
-              body: { encoding: 'text', data: 'Access denied' }
-            };
-          }
+            if (allowedIps.indexOf(clientIp) === -1) {
+              return {
+                statusCode: 403,
+                statusDescription: 'Forbidden',
+                body: { encoding: 'text', data: 'Access denied' }
+              };
+            }
 
-          if (request.uri.startsWith('/api/')) {
-            request.uri = request.uri.replace('/api', '/prod');
+            if (request.uri.startsWith('/api/')) {
+              request.uri = request.uri.replace('/api', '/prod');
+            }
+            return request;
           }
-          return request;
-        }
+        - AllowedIps: !Join [',', !Ref AllowedIpAddresses]
 
 Outputs:
   CustomDomainName:

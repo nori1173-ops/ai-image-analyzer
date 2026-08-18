@@ -2,7 +2,7 @@
 
 ## 概要
 
-観測カメラ等の画像に対して、指定したオブジェクト（例：クマ、人、車両等）が含まれるかどうかをAIで判定するAPIを構築する。テスト用のWebフロントエンドを備え、最終的にはexternal-systemのワークフロー機能から本APIを呼び出すことで、プログラム修正なしに自動パイプラインを構築する。
+観測カメラ等の画像に対して、指定したオブジェクト（例：人物、車両等）が含まれるかどうかをAIで判定するAPIを構築する。テスト用のWebフロントエンドを備え、最終的にはmail-backendのワークフロー機能から本APIを呼び出すことで、プログラム修正なしに自動パイプラインを構築する。
 
 ## 実現性評価
 
@@ -11,14 +11,14 @@
 | 項目 | 評価 | 根拠 |
 |------|------|------|
 | AI画像解析 | ✅ 確実 | OpenAI Vision API (GPT-4.1/5.2) がbase64画像の直接分析に対応。構造化JSON出力も可能 |
-| external-mail連携 | ✅ 確実 | 画像はS3 RepositoryBucketにMIME形式で保存。API経由でbase64取得可能。NotificationTopic SNSで受信検知可能 |
-| AWS構成 | ✅ 確実 | solar-radiation-apiと同パターン（CloudFront + API Gateway + Lambda + S3 + Route53）が確立済み |
+| mail-backend連携 | ✅ 確実 | 画像はS3 RepositoryBucketにMIME形式で保存。API経由でbase64取得可能。DeliverTopic SNSで受信検知可能 |
+| AWS構成 | ✅ 確実 | ref-project-aと同パターン（CloudFront + API Gateway + Lambda + S3 + Route53）が確立済み |
 | 認証 | ✅ 確実 | Amplify + Cognito + Vue3は公式サポート。`@aws-amplify/ui-vue` でAuthenticatorコンポーネント提供済み |
 | コスト | ⚠️ 要試算 | OpenAI Vision APIは画像トークン課金。1枚あたり約$0.01〜0.03（解像度依存） |
 
 ---
 
-## external-system 画像データ調査結果
+## mail-backend 画像データ調査結果
 
 ### 重要な発見（当初の推測との差異）
 
@@ -41,15 +41,15 @@
 
 **テスト・手動実行**: フロントエンドからbase64画像をPOSTして解析
 
-**自動パイプライン（external-systemのワークフロー利用）**:
-external-systemのコード修正は不要。既存のワークフロー機能（`UploadByHttp` タスク）で本APIを呼び出せる。
+**自動パイプライン（mail-backendのワークフロー利用）**:
+mail-backendのコード修正は不要。既存のワークフロー機能（`HttpUpload` タスク）で本APIを呼び出せる。
 
 ![PLAN-diagram-2](images/PLAN-diagram-2.svg)
 
-- `UploadByHttp` タスクは内部で `base64.b64encode(attachment.payload)` を実行しBase64化してPOSTする
+- `HttpUpload` タスクは内部で `base64.b64encode(attachment.payload)` を実行しBase64化してPOSTする
 - カスタムヘッダー指定可能（APIキー等）
 - 制約: `attachments[0]`（最初の1添付のみ）。観測カメラは通常1枚なので問題なし
-- ワークフロー定義はexternal-systemのUI/APIから作成可能
+- ワークフロー定義はmail-backendのUI/APIから作成可能
 
 ---
 
@@ -63,7 +63,7 @@ external-systemのコード修正は不要。既存のワークフロー機能�
 
 | 経路 | IP制限 | 認証方式 | 用途 |
 |------|--------|----------|------|
-| ブラウザ → CloudFront → API Gateway | ✅ 自社IPのみ | Cognito JWT + Origin Verify Header | テスト画面 |
+| ブラウザ → CloudFront → API Gateway | ✅ 弊社IPのみ | Cognito JWT + Origin Verify Header | テスト画面 |
 | ワークフロー → API Gateway 直接 | ❌ 不要 | APIキー (`x-api-key`) | 自動パイプライン |
 
 ---
@@ -84,7 +84,7 @@ external-systemのコード修正は不要。既存のワークフロー機能�
 ```json
 {
   "image": "data:image/jpeg;base64,/9j/4AAQ...",
-  "target": "クマ",
+  "target": "人物",
   "detail": "low"
 }
 ```
@@ -95,7 +95,7 @@ external-systemのコード修正は不要。既存のワークフロー機能�
 {
   "filename": "photo.jpg",
   "data": "/9j/4AAQ...",
-  "target": "クマ"
+  "target": "人物"
 }
 ```
 
@@ -115,8 +115,8 @@ external-systemのコード修正は不要。既存のワークフロー機能�
 ```json
 {
   "found": true,
-  "context": "画像内にクマが存在するかどうかを確認してください。",
-  "answer": "はい、画像の右側に茶色のクマが1頭確認できます。森林の中を歩いている様子です。",
+  "context": "画像内に人物が存在するかどうかを確認してください。",
+  "answer": "はい、画像の右側に人物が1名確認できます。森林の中を歩いている様子です。",
   "confidence": 92,
   "model": "gpt-5.2",
   "usage": {
@@ -293,7 +293,7 @@ class GeminiAnalyzer(ImageAnalyzer):
 
 ## CloudFormationテンプレート構成
 
-external-systemのパターンを踏襲し、親テンプレート＋子スタック2つのネスト構成とする。
+mail-backendのパターンを踏襲し、親テンプレート＋子スタック2つのネスト構成とする。
 
 ### api/template.yaml（APIスタック）
 
@@ -316,7 +316,7 @@ Parameters:
   - ApiDomainName (API Gatewayドメイン)
   - SubDomain (image-analysis)
   - HostedZoneId, AcmCertificateArn
-  - AllowedIpAddress (自社グローバルIP)
+  - AllowedIpAddress (許可IP)
 
 Resources:
   - S3 Bucket (静的ホスティング)
@@ -385,7 +385,7 @@ UIは `ui-ux-pro-max` スキルを使用して高品質なデザインを実現�
 │  → 3. 解析ボタン                                  │
 │  対応形式: JPG, PNG | 最大: 20MB                   │
 ├─────────── セキュリティ ──────────────────────────┤
-│  ✅ SSL/TLS暗号化  ✅ 組織内IP限定                   │
+│  ✅ SSL/TLS暗号化  ✅ 社内IP限定                   │
 │  ✅ Cognito認証済  ✅ API保護 (Origin Verify)      │
 │  ✅ 画像: 解析後即破棄  ✅ AWS東京リージョン        │
 │                              [詳細を見る ▸]        │
@@ -421,7 +421,7 @@ UIは `ui-ux-pro-max` スキルを使用して高品質なデザインを実現�
    - 経営陣・非エンジニアにも一目でセキュリティが伝わるデザイン
    - 表示項目:
      - 🔒 通信: SSL/TLS暗号化（HTTPS）
-     - 🌐 アクセス制限: 組織内IPのみ許可
+     - 🌐 アクセス制限: 社内IPのみ許可
      - 🔑 認証: Cognito JWT認証済み
      - 🛡️ API保護: Origin Verify + APIキー
      - 🗑️ 画像データ: 解析後即破棄（サーバー保存なし）
@@ -527,7 +527,7 @@ UIは `ui-ux-pro-max` スキルを使用して高品質なデザインを実現�
 
 - プロジェクト概要
 - テスト画面URL（`https://image-analysis.example-cloud.com`）
-- アクセス条件（自社グローバルIPからのみ）
+- アクセス条件（許可IPからのみ）
 - 利用手順（ログイン → 画像アップロード → target入力 → 解析実行 → 結果確認）
 - API直接呼び出し方法（curl / Postmanサンプル）
 - ワークフロー連携方法
@@ -592,7 +592,7 @@ tests/e2e/
 
 | 項目 | 対策 |
 |------|------|
-| テスト画面 IP制限 | CloudFront Function で自社グローバルIP (`203.0.113.1`) のみ許可 |
+| テスト画面 IP制限 | CloudFront Function で許可IP (`203.0.113.10`) のみ許可 |
 | テスト画面 API認証 | Cognito User Pool JWT トークン検証 |
 | API Gateway直アクセス防止 | CloudFront Origin Verify Header |
 | ワークフロー API認証 | API Gateway APIキー (`x-api-key`) |
@@ -681,7 +681,7 @@ tests/e2e/
 
 | 項目 | バージョン / 状態 | 備考 |
 |------|-------------------|------|
-| AWS CLI (Windows) | v2.34.1 | `aws.exe` でWSLから利用可、account: 123456789012 |
+| AWS CLI (Windows) | v2.34.1 | `aws.exe` でWSLから利用可、account: 210000000001 |
 | AWS SAM CLI | v1.154.0 | `~/.local/venvs/image-analysis/bin/sam` |
 | AWS MCP | Core + CloudFormation | user設定に追加済み、`~/.aws` → Windows側シンボリックリンク |
 | OpenAI API Key | 設定済み | `~/.bashrc`、gpt-4.1-mini / gpt-4.1 / gpt-5.2 利用可能 |
@@ -692,8 +692,8 @@ tests/e2e/
 | Playwright | v1.58.2 + Chromium | MCP経由で動作確認済み |
 | uv / uvx | v0.10.8 | `~/.local/bin/` |
 | uipro-cli | v2.2.3 | グローバルインストール済み |
-| Route53 | example-cloud.com (ZXXXXXXXXXXXXX) | |
-| ACM (us-east-1) | `*.example-cloud.com` ISSUED (xxxxxxxx...) | 2026-11-07まで有効 |
+| Route53 | example-cloud.com (Z0EXAMPLEZONE0) | |
+| ACM (us-east-1) | `*.example-cloud.com` ISSUED (aaaaaaaa...) | 2026-11-07まで有効 |
 
 ### スキル（セキュリティスキャン済み — 実装時の再スキャン不要）
 

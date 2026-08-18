@@ -1,2 +1,2 @@
-openai>=1.0.0
+anthropic[aws]>=0.116.0
 boto3>=1.34.0
